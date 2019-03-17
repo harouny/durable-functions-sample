@@ -22,8 +22,7 @@ namespace durable_functions_sample
     public class DataItem
     {
         public Issue Issue { get; set; }
-        public string Text { get; set; }
-        public string Language { get; set; }
+        public Document Document { get; set; }
     }
 
     public static class AnalyseTextHttpHandler
@@ -52,20 +51,20 @@ namespace durable_functions_sample
                 items.Add(issue.Number.ToString(), new DataItem
                 {
                     Issue = issue,
-                    Text = document,
+                    Document = new Document
+                    {
+                        Id = issue.Number.ToString(),
+                        Text = document
+                    },
                 });
             }
             
 
             // 3- detect languages
             var languagesResponse = await SharedServices.CognitiveServicesHttpClient
-                .PostAsJsonAsync("/text/analytics/v2.0/languages", new
+                .PostAsJsonAsync("/text/analytics/v2.0/languages", new AnalyseTextRequest
                 {
-                    Documents = items.Select(item => new
-                    {
-                        Id = item.Value.Issue.Number,
-                        item.Value.Text,
-                    })
+                    Documents = items.Select(item => item.Value.Document).ToList()
                 });
             languagesResponse.EnsureSuccessStatusCode();
             var languagesBody = await languagesResponse.Content.ReadAsStringAsync();
@@ -80,21 +79,16 @@ namespace durable_functions_sample
                 var issue = await SharedServices.GitHubClient.Issue.Update("harouny", request.RepoName, items[doc.Id].Issue.Number,
                     issueUpdate);
                 // set inferred language to each document
-                items[doc.Id].Language = doc.InferredLanguage;
+                items[doc.Id].Document.Language = doc.InferredLanguage;
                 items[doc.Id].Issue = issue;
             }
             
 
             // 5- analyse sentiment
             var sentimentResponse = await SharedServices.CognitiveServicesHttpClient
-                .PostAsJsonAsync("/text/analytics/v2.0/sentiment", new
+                .PostAsJsonAsync("/text/analytics/v2.0/sentiment", new AnalyseTextRequest
                 {
-                    Documents = items.Select(item => new
-                    {
-                        Id = item.Value.Issue.Number,
-                        item.Value.Text,
-                        item.Value.Language,
-                    })
+                    Documents = items.Select(item => item.Value.Document).ToList(),
                 });
             sentimentResponse.EnsureSuccessStatusCode();
             var sentimentBody = await sentimentResponse.Content.ReadAsStringAsync();
