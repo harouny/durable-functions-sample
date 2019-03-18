@@ -68,7 +68,6 @@ namespace durable_functions_sample
                 // set document language
                 items[languageInfo.Id].Document.Language = languageInfo.InferredLanguage;
 
-                // 4- add detected language issue label
                 var issue = await Github.AddLabelAsync(
                         issue: items[languageInfo.Id].Issue,
                         repoName: request.RepoName,
