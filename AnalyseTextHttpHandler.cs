@@ -12,6 +12,18 @@ using Octokit;
 
 namespace durable_functions_sample
 {
+    public class Request
+    {
+        public string RepoName { get; set; }
+        public string[] Texts { get; set; }
+    }
+
+    public class DataItem
+    {
+        public Issue Issue { get; set; }
+        public Document Document { get; set; }
+    }
+
     public static class AnalyseTextHttpHandler
     {
         [FunctionName("AnalyseTextHttpHandler")]
@@ -23,15 +35,15 @@ namespace durable_functions_sample
             var request = JsonConvert.DeserializeObject<Request>(requestBody);
             var items = new Dictionary<string, DataItem>();
 
-            // 1 - create a github repo
-            await Github.CreateRepoAsync(request.RepoName);
+            #region create a github repo
+                await Github.CreateRepoAsync(request.RepoName);
+            #endregion
 
-            
-            // 2- create github issue for every document
+            #region create github issue for every text item
             foreach (var text in request.Texts)
             {
                 var issue = await Github.CreateIssueAsync(
-                    text: text, 
+                    text: text,
                     repoName: request.RepoName);
 
                 items.Add(issue.Number.ToString(), new DataItem
@@ -43,13 +55,16 @@ namespace durable_functions_sample
                         Text = text,
                         Language = null,
                     },
-                });
+                }); 
             }
-            
-            // 3- detect languages
+            #endregion
+
+            #region detect languages with cognitive services
             var languages = await CognitiveServices.DetectLanguagesAsync(
-                documents: items.Select(i => i.Value.Document).ToList());
-            
+                    documents: items.Select(i => i.Value.Document).ToList());
+            #endregion
+
+            #region add github labguage labels
             foreach (var languageInfo in languages)
             {
                 // set document language
@@ -58,41 +73,30 @@ namespace durable_functions_sample
                 // 4- add detected language issue label
                 var issue = await Github.AddLabelAsync(
                         issue: items[languageInfo.Id].Issue,
-                        repoName: request.RepoName, 
+                        repoName: request.RepoName,
                         label: languageInfo.InferredLanguageName);
                 items[languageInfo.Id].Issue = issue;
             }
-            
+            #endregion
 
-            // 5- analyse sentiment
+            #region analyse sentiment with cognitive services
             var sentiments = await CognitiveServices.AnalyseSentimentAsync(
-                documents: items.Select(i => i.Value.Document).ToList());
-           
+                    documents: items.Select(i => i.Value.Document).ToList());
+            #endregion
+
+            #region add github sentiment labels
             foreach (var sentimentInfo in sentiments)
             {
-                // 6- add detected sentiments issue label
                 var issue = await Github.AddLabelAsync(
                     issue: items[sentimentInfo.Id].Issue,
                     repoName: request.RepoName,
                     label: sentimentInfo.InferredSentiment);
                 items[sentimentInfo.Id].Issue = issue;
-            }
-
+            } 
+            #endregion
 
             // return all github issue urls
             return new OkObjectResult(items.Values.Select(v => v.Issue.HtmlUrl));
         }
-    }
-
-    public class Request
-    {
-        public string RepoName { get; set; }
-        public string[] Texts { get; set; }
-    }
-
-    public class DataItem
-    {
-        public Issue Issue { get; set; }
-        public Document Document { get; set; }
     }
 }
