@@ -23,18 +23,18 @@ namespace durable_functions_sample
         public Document Document { get; set; }
     }
 
-    public static class AnalyseTextHttpHandler
+
+    public static class AnalyseTextOrchestration
     {
-        [FunctionName("AnalyseTextHttpHandler")]
-        public static async Task<IActionResult> Run(
-            [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequest req)
+        [FunctionName("AnalyseTextOrchestration")]
+        public static async Task<IEnumerable<string>> Run([OrchestrationTrigger] DurableOrchestrationContext context)
         {
-            var requestBody = await req.ReadAsStringAsync();
-            var request = JsonConvert.DeserializeObject<Request>(requestBody);
+            var request = context.GetInput<Request>();
+            return new List<string>();
             var items = new Dictionary<string, DataItem>();
 
             #region create a github repo
-                await Github.CreateRepoAsync(request.RepoName);
+            await Github.CreateRepoAsync(request.RepoName);
             #endregion
 
             #region create github issue for every text item
@@ -53,7 +53,7 @@ namespace durable_functions_sample
                         Text = text,
                         Language = null,
                     },
-                }); 
+                });
             }
             #endregion
 
@@ -89,11 +89,25 @@ namespace durable_functions_sample
                     repoName: request.RepoName,
                     label: sentimentInfo.InferredSentiment);
                 items[sentimentInfo.Id].Issue = issue;
-            } 
+            }
             #endregion
 
             // return all github issue urls
-            return new OkObjectResult(items.Values.Select(v => v.Issue.HtmlUrl));
+            return items.Values.Select(v => v.Issue.HtmlUrl);
+        }
+    }
+
+
+    public static class AnalyseTextHttpHandler
+    {
+        [FunctionName("AnalyseTextHttpHandler")]
+        public static async Task<IActionResult> Run(
+            [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequest req, [OrchestrationClient] DurableOrchestrationClient orchestrationClient)
+        {
+            var requestBody = await req.ReadAsStringAsync();
+            var request = JsonConvert.DeserializeObject<Request>(requestBody);
+            var instanceId = await orchestrationClient.StartNewAsync("AnalyseTextOrchestration", request);
+            return new OkObjectResult(orchestrationClient.CreateHttpManagementPayload(instanceId));
         }
     }
 }
