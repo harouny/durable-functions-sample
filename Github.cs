@@ -12,7 +12,8 @@ namespace durable_functions_sample
             await SharedServices.GitHubClient.Repository.Create(new NewRepository(repoName));
         }
 
-        public static async Task<Issue> CreateIssueAsync(string text, string repoName)
+
+        public static async Task<(int issueNumber, string issueUrl)> CreateIssueAsync(string text, string repoName)
         {
             var createIssue = new NewIssue(text.Length > 150 ? text.Substring(0, 150) : text)
             {
@@ -22,15 +23,17 @@ namespace durable_functions_sample
                 Environment.GetEnvironmentVariable("GuthubOwner"), 
                 repoName, 
                 createIssue);
-            return issue;
+            return (issue.Number, issue.HtmlUrl);
         }
 
-        public static async Task<Issue> AddLabelAsync(Issue issue, string repoName, string label)
+        public static async Task<Issue> AddLabelAsync(int issueNumber, string repoName, string label)
         {
+            var owner = Environment.GetEnvironmentVariable("GuthubOwner");
+            var issue = await SharedServices.GitHubClient.Issue.Get(owner, repoName, issueNumber);
             var issueUpdate = issue.ToUpdate();
             issueUpdate.AddLabel(label);
             return await SharedServices.GitHubClient.Issue.Update(
-                Environment.GetEnvironmentVariable("GuthubOwner"), 
+                    owner, 
                     repoName, 
                     issue.Number,
                 issueUpdate);

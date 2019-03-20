@@ -19,47 +19,55 @@ namespace durable_functions_sample
 
     public class DataItem
     {
-        public Issue Issue { get; set; }
         public Document Document { get; set; }
+        public string GithubIssueHtmlUrl { get; set; }
     }
 
 
     public static class AnalyseTextOrchestration
     {
-        [FunctionName("AnalyseTextOrchestration")]
+        [FunctionName(nameof(AnalyseTextOrchestration))]
         public static async Task<IEnumerable<string>> Run([OrchestrationTrigger] DurableOrchestrationContext context)
         {
             var request = context.GetInput<Request>();
-            return new List<string>();
             var items = new Dictionary<string, DataItem>();
 
             #region create a github repo
-            await Github.CreateRepoAsync(request.RepoName);
+            await context.CallActivityAsync(
+                functionName: nameof(Activities.CreateGithubRepoActivity), 
+                input: request.RepoName);
             #endregion
 
             #region create github issue for every text item
-            foreach (var text in request.Texts)
-            {
-                var issue = await Github.CreateIssueAsync(
-                    text: text,
-                    repoName: request.RepoName);
+            var tasks = request.Texts
+                    .Select(text => 
+                        context.CallActivityAsync<(int issueNumber, string issueHtmlUrl)>(
+                            functionName: nameof(Activities.CreateIssueAsyncActivity), 
+                            input: (text, request.RepoName)))
+                    .ToList();
 
-                items.Add(issue.Number.ToString(), new DataItem
+            await Task.WhenAll(tasks);
+
+            for (var i = 0; i < request.Texts.Length; i++)
+            {
+                var (issueNumber, issueUrl) = tasks[i].Result;
+                items.Add(issueNumber.ToString(), new DataItem
                 {
-                    Issue = issue, // github issue
-                    Document = new Document // cognitive services Document
+                    Document = new Document
                     {
-                        Id = issue.Number.ToString(),
-                        Text = text,
+                        Id = issueNumber.ToString(),
+                        Text = request.Texts[i],
                         Language = null,
                     },
+                    GithubIssueHtmlUrl = issueUrl
                 });
             }
             #endregion
 
             #region detect languages with cognitive services
-            var languages = await CognitiveServices.DetectLanguagesAsync(
-                    documents: items.Select(i => i.Value.Document).ToList());
+            var languages = await context.CallActivityAsync<IList<DetectLanguageResponse.Document>>(
+                    functionName: nameof(Activities.DetectLanguagesActivity),
+                    input: items.Select(i => i.Value.Document));
             #endregion
 
             #region add github labguage labels
@@ -68,40 +76,38 @@ namespace durable_functions_sample
                 // set document language
                 items[languageInfo.Id].Document.Language = languageInfo.InferredLanguage;
 
-                var issue = await Github.AddLabelAsync(
-                        issue: items[languageInfo.Id].Issue,
-                        repoName: request.RepoName,
-                        label: languageInfo.InferredLanguageName);
-                items[languageInfo.Id].Issue = issue;
+                await context.CallActivityAsync<Issue>(
+                    functionName: nameof(Activities.AddGithubLabelAsyncActivity), 
+                    input: (int.Parse(languageInfo.Id), 
+                            request.RepoName, 
+                            languageInfo.InferredLanguageName));
             }
             #endregion
 
             #region analyse sentiment with cognitive services
-            var sentiments = await CognitiveServices.AnalyseSentimentAsync(
-                    documents: items.Select(i => i.Value.Document).ToList());
+            var sentiments = await context.CallActivityAsync<IList<AnalyseSentimentResponse.Document>>(
+                functionName: nameof(Activities.AnalyseSentimentActivity),
+                input: items.Select(i => i.Value.Document));
             #endregion
 
             #region add github sentiment labels
             foreach (var sentimentInfo in sentiments)
             {
-                var issue = await Github.AddLabelAsync(
-                    issue: items[sentimentInfo.Id].Issue,
-                    repoName: request.RepoName,
-                    label: sentimentInfo.InferredSentiment);
-                items[sentimentInfo.Id].Issue = issue;
+                await context.CallActivityAsync<Issue>(
+                    functionName: nameof(Activities.AddGithubLabelAsyncActivity),
+                    input: (int.Parse(sentimentInfo.Id),
+                            request.RepoName,
+                            sentimentInfo.InferredSentiment));
             }
             #endregion
 
             // return all github issue urls
-            return items.Values.Select(v => v.Issue.HtmlUrl);
+            return items.Values.Select(v => v.GithubIssueHtmlUrl);
         }
-    }
 
 
-    public static class AnalyseTextHttpHandler
-    {
-        [FunctionName("AnalyseTextHttpHandler")]
-        public static async Task<IActionResult> Run(
+        [FunctionName(nameof(AnalyseTextHttpHandler))]
+        public static async Task<IActionResult> AnalyseTextHttpHandler(
             [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequest req, [OrchestrationClient] DurableOrchestrationClient orchestrationClient)
         {
             var requestBody = await req.ReadAsStringAsync();
@@ -109,5 +115,7 @@ namespace durable_functions_sample
             var instanceId = await orchestrationClient.StartNewAsync("AnalyseTextOrchestration", request);
             return new OkObjectResult(orchestrationClient.CreateHttpManagementPayload(instanceId));
         }
+
+        
     }
 }
